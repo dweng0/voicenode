@@ -1,0 +1,20 @@
+{
+  "id": "595fc2a5-7ed6-4a51-89da-063af48184bc",
+  "label": "Voice Node",
+  "location": "unknown",
+  "server_url": "ws://localhost:3001",
+  "whisper_model": "base.en",
+  "devices": {
+    "input": 5,
+    "output": 5
+  },
+  "vad": {
+    "aggressiveness": 3,
+    "silence_duration_ms": 800,
+    "max_utterance_length_ms": 30000
+  },
+  "capabilities": [
+    "mic",
+    "speaker"
+  ]
+}
