@@ -365,14 +365,15 @@ def test_cli_main_calls_run_async_with_audio_output():
         async def fake_run_async(self, audio_output):
             run_async_called_with.append(audio_output)
 
-        mock_faster_whisper = MagicMock()
-        mock_faster_whisper.WhisperModel.return_value = MagicMock()
+        mock_pywhispercpp = MagicMock()
+        mock_pywhispercpp.Model.return_value = MagicMock()
 
         with patch.dict("sys.modules", {
             "webrtcvad": mock_webrtcvad,
             "structlog": mock_structlog,
             "sounddevice": mock_sd,
-            "faster_whisper": mock_faster_whisper,
+            "pywhispercpp": mock_pywhispercpp,
+            "pywhispercpp.model": mock_pywhispercpp,
         }), patch("sys.argv", ["voicenode", "--config", str(config_path)]), \
            patch("voicenode.core.VoiceNodeApplication.run_async", fake_run_async), \
            patch("voicenode.logging_config.setup_logging"):
