@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from voicenode.core import DeviceIdentity
 
 
 def test_config_creation_with_defaults():
@@ -21,7 +22,8 @@ def test_config_creation_with_defaults():
         assert config.location == "unknown"
         assert config.server_url == "ws://localhost:3001"
         assert config.whisper_model == "base.en"
-        assert config.devices == {"input": 0, "output": 1}
+        assert isinstance(config.devices["input"], DeviceIdentity)
+        assert isinstance(config.devices["output"], DeviceIdentity)
         assert config.capabilities == ["mic", "speaker"]
 
         loaded_config = adapter.load()
@@ -39,11 +41,13 @@ def test_config_update_input_device():
 
         adapter.create_default()
         config = adapter.load()
-        config.devices["input"] = 5
+        config.devices["input"] = DeviceIdentity(name="usb-mic", index=5, serial="ABC123")
         adapter.save(config)
 
         loaded_config = adapter.load()
-        assert loaded_config.devices["input"] == 5
+        assert loaded_config.devices["input"].name == "usb-mic"
+        assert loaded_config.devices["input"].index == 5
+        assert loaded_config.devices["input"].serial == "ABC123"
 
 
 def test_config_update_output_device():
@@ -56,8 +60,9 @@ def test_config_update_output_device():
 
         adapter.create_default()
         config = adapter.load()
-        config.devices["output"] = 3
+        config.devices["output"] = DeviceIdentity(name="speaker", index=3, serial=None)
         adapter.save(config)
 
         loaded_config = adapter.load()
-        assert loaded_config.devices["output"] == 3
+        assert loaded_config.devices["output"].name == "speaker"
+        assert loaded_config.devices["output"].index == 3

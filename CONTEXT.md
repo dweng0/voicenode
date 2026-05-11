@@ -19,6 +19,9 @@ The moment VAD detects end of speech (silence duration threshold met). Triggers 
 ### NodeIdentity
 The Voice Node's identity: `id` (auto-generated UUID), `label` (user-facing name), `location` (room description for LLM context), `capabilities` (mic/speaker).
 
+### DeviceIdentity
+Stable identifier for audio input/output devices: `name` (device name), `index` (numeric index), `serial` (USB serial if available). Matching priority: serial > name > index. Survives device reconnection via name/serial rather than numeric index.
+
 ### TTS Audio
 Binary PCM audio (22050 Hz, 16-bit signed LE, mono) sent from housekeeper to Voice Node for playback. Received as raw WebSocket binary frame.
 

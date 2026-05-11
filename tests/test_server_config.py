@@ -44,10 +44,14 @@ def test_server_flag_saves_server_url_to_config():
 
         mock_structlog = MagicMock()
         mock_structlog.get_logger.return_value = MagicMock()
+        mock_sd = MagicMock()
+        mock_sd.query_devices.return_value = [
+            {"name": "default", "max_input_channels": 2, "max_output_channels": 2}
+        ]
 
         with patch("sys.argv", ["voicenode", "--server", "192.168.1.112", "--config", str(config_path)]):
             with patch("asyncio.run"):
-                with patch.dict("sys.modules", {"structlog": mock_structlog}):
+                with patch.dict("sys.modules", {"structlog": mock_structlog, "sounddevice": mock_sd}):
                     with patch("voicenode.core.VoiceNodeApplication") as mock_app_cls:
                         mock_app_cls.return_value.config = adapter.load()
                         with patch("voicenode.adapters.SounddeviceAudioAdapter"):

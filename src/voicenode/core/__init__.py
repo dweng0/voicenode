@@ -1,9 +1,51 @@
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 from concurrent.futures import ThreadPoolExecutor
 
 from voicenode.ports import AudioFrame, VADState, VADEvent, TranscriberPort
+
+
+@dataclass
+class DeviceIdentity:
+    """Stable device identifier: name (required), index and serial (optional, for matching)."""
+    name: str
+    index: Optional[int] = None
+    serial: Optional[str] = None
+
+
+class DeviceRegistry:
+    """Registry of available audio devices with fuzzy matching."""
+
+    def __init__(self, devices_list):
+        """Initialize registry from sounddevice.query_devices() output."""
+        self.devices = {}  # index -> device dict
+        for i, device_dict in enumerate(devices_list):
+            self.devices[i] = device_dict
+
+    def find(self, device_identity: "DeviceIdentity") -> Optional[dict]:
+        """
+        Find device in registry by DeviceIdentity.
+        Matching priority: serial > name > index.
+        Returns device dict or None if not found.
+        """
+        # Priority 1: Match by serial number
+        if device_identity.serial:
+            for device in self.devices.values():
+                if device.get("serial") == device_identity.serial:
+                    return device
+
+        # Priority 2: Match by name
+        if device_identity.name:
+            for device in self.devices.values():
+                if device.get("name") == device_identity.name:
+                    return device
+
+        # Priority 3: Match by index
+        if device_identity.index is not None:
+            return self.devices.get(device_identity.index)
+
+        return None
 
 
 @dataclass

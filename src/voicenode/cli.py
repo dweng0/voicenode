@@ -106,23 +106,31 @@ def run_monitor(device_id: int, audio_adapter, vad_tracker=None, transcriber=Non
         print("Stopping...")
 
 
-def main():
+def parse_args(argv=None):
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(prog="voicenode", description="Voice node client")
     subparsers = parser.add_subparsers(dest="command")
-    
+
     monitor_parser = subparsers.add_parser("monitor", help="Monitor audio device")
     monitor_parser.add_argument("device_id", type=int, help="Audio device ID to monitor")
-    
+
     log_parser = subparsers.add_parser("log", help="Tail log file")
     log_parser.add_argument("-n", "--lines", type=int, default=20, help="Number of lines to show initially")
-    
+
     parser.add_argument("--version", action="store_true", help="Show version")
     parser.add_argument("--list-devices", action="store_true", help="List audio devices")
-    parser.add_argument("--input", type=int, metavar="ID", help="Set input device ID")
-    parser.add_argument("--output", type=int, metavar="ID", help="Set output device ID")
+    parser.add_argument("--input", type=str, metavar="NAME", help="Set input device by name")
+    parser.add_argument("--output", type=str, metavar="NAME", help="Set output device by name")
+    parser.add_argument("--choose-input", action="store_true", help="Interactive menu to select input device")
+    parser.add_argument("--choose-output", action="store_true", help="Interactive menu to select output device")
     parser.add_argument("--server", type=str, metavar="IP", help="Set housekeeper IP address (e.g. 192.168.1.112)")
     parser.add_argument("--config", type=str, metavar="PATH", default="config.json", help="Config file path")
-    args = parser.parse_args()
+
+    return parser.parse_args(argv)
+
+
+def main():
+    args = parse_args()
 
     if args.version:
         print(f"voicenode {voicenode.__version__}")
@@ -157,14 +165,75 @@ def main():
     if not config_adapter.exists():
         config_adapter.create_default()
 
+    # Handle --choose-input and --choose-output (interactive menu)
+    if args.choose_input or args.choose_output:
+        from voicenode.adapters.device_menu import format_device_list, select_and_save_device
+        import sounddevice as sd
+
+        devices_list = sd.query_devices()
+
+        if args.choose_input:
+            device_type = "input"
+            print("\n=== Select Input Device ===")
+        else:
+            device_type = "output"
+            print("\n=== Select Output Device ===")
+
+        print(format_device_list(devices_list))
+        print()
+
+        try:
+            device_index = int(input(f"Enter device number: "))
+            if device_index < 0 or device_index >= len(devices_list):
+                print(f"Error: Device {device_index} not found")
+                return
+
+            select_and_save_device(
+                config_adapter=config_adapter,
+                device_index=device_index,
+                device_type=device_type
+            )
+            print(f"Saved {device_type} device: {devices_list[device_index]['name']}")
+        except ValueError:
+            print("Error: Invalid device number")
+            return
+
+        return
+
+    # Handle --input and --output device name overrides (one-time, don't save)
     if args.input is not None or args.output is not None:
+        import sounddevice as sd
+        from voicenode.core import DeviceRegistry, DeviceIdentity
+
         config = config_adapter.load()
+        devices_list = sd.query_devices()
+        registry = DeviceRegistry(devices_list)
+
         if args.input is not None:
-            config.devices["input"] = args.input
+            device = registry.find(DeviceIdentity(name=args.input, index=None, serial=None))
+            if device is None:
+                print(f"Error: Device '{args.input}' not found. Run `voicenode --choose-input` to select a device.")
+                return
+            device_index = devices_list.index(device) if device in devices_list else None
+            config.devices["input"] = DeviceIdentity(
+                name=args.input,
+                index=device_index,
+                serial=device.get("serial")
+            )
+
         if args.output is not None:
-            config.devices["output"] = args.output
-        config_adapter.save(config)
-        print(f"Config updated: input={config.devices['input']}, output={config.devices['output']}")
+            device = registry.find(DeviceIdentity(name=args.output, index=None, serial=None))
+            if device is None:
+                print(f"Error: Device '{args.output}' not found. Run `voicenode --choose-output` to select a device.")
+                return
+            device_index = devices_list.index(device) if device in devices_list else None
+            config.devices["output"] = DeviceIdentity(
+                name=args.output,
+                index=device_index,
+                serial=device.get("serial")
+            )
+    else:
+        config = config_adapter.load()
 
     if args.server is not None:
         if not validate_ipv4(args.server):
@@ -175,6 +244,11 @@ def main():
         config.server_url = url
         config_adapter.save(config)
         print(f"Config updated: server={url}")
+
+    # Check for missing devices and prompt if needed
+    from voicenode.adapters.device_menu import check_and_prompt_missing_devices
+    if not check_and_prompt_missing_devices(config_adapter):
+        return
 
     import asyncio
     from voicenode.core import VoiceNodeApplication
