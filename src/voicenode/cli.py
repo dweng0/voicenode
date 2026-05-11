@@ -7,6 +7,22 @@ from voicenode.adapters import SounddeviceAudioAdapter
 from voicenode.adapters.json_config_adapter import JsonConfigAdapter
 
 
+import re
+
+_IPV4_RE = re.compile(r"^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$")
+
+
+def validate_ipv4(ip: str) -> bool:
+    m = _IPV4_RE.match(ip)
+    if not m:
+        return False
+    return all(0 <= int(o) <= 255 for o in m.groups())
+
+
+def build_server_url(ip: str) -> str:
+    return f"ws://{ip}:3001"
+
+
 def get_audio_adapter():
     return SounddeviceAudioAdapter()
 
@@ -60,8 +76,8 @@ def run_monitor(device_id: int, audio_adapter, vad_tracker=None, transcriber=Non
         vad_tracker = VADTracker()
     
     if transcriber is None:
-        from voicenode.adapters.faster_whisper_adapter import FasterWhisperAdapter
-        transcriber = FasterWhisperAdapter("base.en")
+        from voicenode.adapters.whisper_cpp_adapter import WhisperCppAdapter
+        transcriber = WhisperCppAdapter("base.en")
     
     frame_count = 0
     buffered_frames: list[AudioFrame] = []
@@ -104,6 +120,7 @@ def main():
     parser.add_argument("--list-devices", action="store_true", help="List audio devices")
     parser.add_argument("--input", type=int, metavar="ID", help="Set input device ID")
     parser.add_argument("--output", type=int, metavar="ID", help="Set output device ID")
+    parser.add_argument("--server", type=str, metavar="IP", help="Set housekeeper IP address (e.g. 192.168.1.112)")
     parser.add_argument("--config", type=str, metavar="PATH", default="config.json", help="Config file path")
     args = parser.parse_args()
 
@@ -148,6 +165,16 @@ def main():
             config.devices["output"] = args.output
         config_adapter.save(config)
         print(f"Config updated: input={config.devices['input']}, output={config.devices['output']}")
+
+    if args.server is not None:
+        if not validate_ipv4(args.server):
+            print(f"Error: '{args.server}' is not a valid IPv4 address")
+            return
+        url = build_server_url(args.server)
+        config = config_adapter.load()
+        config.server_url = url
+        config_adapter.save(config)
+        print(f"Config updated: server={url}")
 
     import asyncio
     from voicenode.core import VoiceNodeApplication

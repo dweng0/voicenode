@@ -1,7 +1,7 @@
 {
   "id": "595fc2a5-7ed6-4a51-89da-063af48184bc",
-  "label": "Voice Node",
-  "location": "unknown",
+  "label": "XPS",
+  "location": "everywhere",
   "server_url": "ws://localhost:3001",
   "whisper_model": "base.en",
   "devices": {

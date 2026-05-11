@@ -15,7 +15,18 @@ class JsonConfigAdapter(ConfigPort):
     def load(self) -> NodeConfig:
         with open(self.config_path) as f:
             data = json.load(f)
-        return NodeConfig(**data)
+        return NodeConfig(
+            id=data["id"],
+            label=data["label"],
+            location=data["location"],
+            server_url=data["server_url"],
+            whisper_model=data["whisper_model"],
+            devices=data["devices"],
+            vad=data["vad"],
+            capabilities=data["capabilities"],
+            stt_mode=data.get("stt_mode", "local"),
+            server_http_url=data.get("server_http_url"),
+        )
 
     def save(self, config: NodeConfig) -> None:
         with open(self.config_path, "w") as f:
@@ -28,6 +39,8 @@ class JsonConfigAdapter(ConfigPort):
                 "devices": config.devices,
                 "vad": config.vad,
                 "capabilities": config.capabilities,
+                "stt_mode": config.stt_mode,
+                "server_http_url": config.server_http_url,
             }, f, indent=2)
 
     def create_default(self) -> NodeConfig:

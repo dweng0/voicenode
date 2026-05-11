@@ -67,7 +67,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
             try:
                 audio_array = np.frombuffer(audio, dtype=np.int16)
                 
-                sample_rate = 22050
+                sample_rate = 24000
                 
                 self.current_stream = sd.OutputStream(
                     device=device_id,

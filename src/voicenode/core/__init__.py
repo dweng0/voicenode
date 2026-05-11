@@ -16,6 +16,8 @@ class NodeConfig:
     devices: dict
     vad: dict
     capabilities: list
+    stt_mode: str = "local"
+    server_http_url: Optional[str] = None
 
 
 class ConfigPort(ABC):
@@ -210,8 +212,17 @@ class VoiceNodeApplication:
         )
 
         if transcriber is None:
-            from voicenode.adapters.whisper_cpp_adapter import WhisperCppAdapter
-            self.transcriber = WhisperCppAdapter(self.config.whisper_model)
+            if self.config.stt_mode == "remote":
+                if self.config.server_http_url is None:
+                    raise ValueError("server_http_url required when stt_mode is 'remote'")
+                from voicenode.adapters.http_transcriber_adapter import HttpTranscriberAdapter
+                self.transcriber = HttpTranscriberAdapter(
+                    server_http_url=self.config.server_http_url,
+                    node_id=self.config.id
+                )
+            else:
+                from voicenode.adapters.whisper_cpp_adapter import WhisperCppAdapter
+                self.transcriber = WhisperCppAdapter(self.config.whisper_model)
         else:
             self.transcriber = transcriber
 

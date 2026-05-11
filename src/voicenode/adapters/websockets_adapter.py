@@ -11,7 +11,7 @@ class WebsocketsAdapter(ServerPort):
     async def connect(self) -> None:
         from websockets.client import connect
         
-        self.ws = await connect(self.url)
+        self.ws = await connect(self.url, max_size=None)
 
     async def send(self, message: dict) -> None:
         if self.ws is None:
@@ -19,11 +19,13 @@ class WebsocketsAdapter(ServerPort):
         
         await self.ws.send(json.dumps(message))
 
-    async def receive(self) -> dict:
+    async def receive(self):
         if self.ws is None:
             raise RuntimeError("Not connected")
-        
+
         data = await self.ws.recv()
+        if isinstance(data, bytes):
+            return data
         return json.loads(data)
 
     async def receive_binary(self) -> bytes:
