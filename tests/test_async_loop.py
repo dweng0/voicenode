@@ -121,7 +121,10 @@ def test_receive_loop_plays_binary_tts_frames():
 
                 asyncio.run(run_with_timeout())
 
-        output_device_id = config_adapter.load().devices["output"]
+        config = config_adapter.load()
+        output_device = config.devices["output"]
+        # Extract index from DeviceIdentity
+        output_device_id = output_device.index if hasattr(output_device, 'index') else output_device
         mock_audio_output.play.assert_called_once_with(tts_audio, output_device_id)
 
 

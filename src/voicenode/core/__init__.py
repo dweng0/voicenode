@@ -359,7 +359,9 @@ class VoiceNodeApplication:
         while self.running:
             msg = await self.server.receive()
             if isinstance(msg, bytes):
-                device_id = self.config.devices.get("output", 0)
+                device_config = self.config.devices.get("output", 0)
+                # Extract index from DeviceIdentity or use directly if int
+                device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
                 audio_output.play(msg, device_id)
             elif isinstance(msg, dict):
                 msg_type = msg.get("type")
@@ -422,7 +424,9 @@ class VoiceNodeApplication:
         from voicenode.adapters import SounddeviceAudioAdapter
 
         audio_adapter = SounddeviceAudioAdapter()
-        device_id = self.config.devices["input"]
+        device_config = self.config.devices["input"]
+        # Extract index from DeviceIdentity or use directly if int
+        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
         frame_gen = audio_adapter.capture_frames(device_id=device_id, duration_ms=30)
 
         try:
@@ -439,7 +443,9 @@ class VoiceNodeApplication:
         self.running = True
         audio_adapter = SounddeviceAudioAdapter()
 
-        device_id = self.config.devices["input"]
+        device_config = self.config.devices["input"]
+        # Extract index from DeviceIdentity or use directly if int
+        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
         frame_gen = audio_adapter.capture_frames(device_id=device_id, duration_ms=30)
 
         try:

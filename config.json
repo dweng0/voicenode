@@ -5,8 +5,16 @@
   "server_url": "ws://localhost:3001",
   "whisper_model": "base.en",
   "devices": {
-    "input": 5,
-    "output": 5
+    "input": {
+      "name": "pulse",
+      "index": 5,
+      "serial": null
+    },
+    "output": {
+      "name": "pulse",
+      "index": 5,
+      "serial": null
+    }
   },
   "vad": {
     "aggressiveness": 3,
