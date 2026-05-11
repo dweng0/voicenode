@@ -6,7 +6,7 @@ from voicenode.ports import AudioDevice, AudioFrame, AudioPort, AudioOutputPort
 
 
 class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
-    def __init__(self):
+    def __init__(self, on_playback_complete=None):
         self.current_stream = None
         self.playback_thread = None
         self.stop_flag = threading.Event()
@@ -15,6 +15,8 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
         self.playback_started = False
         self.playback_timer = None
         self.last_chunk_time = None
+        self.on_playback_complete = on_playback_complete
+        self.current_stream_token = None
 
     def list_devices(self) -> list[AudioDevice]:
         import sounddevice as sd
@@ -59,7 +61,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
                 timestamp_ms = int((time.time() - start_time) * 1000)
                 yield AudioFrame(data=data.tobytes(), timestamp_ms=timestamp_ms)
 
-    def play(self, audio: bytes, device_id: int) -> None:
+    def play(self, audio: bytes, device_id: int, stream_token: str = None) -> None:
         import time
 
         with self.buffer_lock:
@@ -68,6 +70,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
 
             if not self.playback_started:
                 self.playback_started = True
+                self.current_stream_token = stream_token
                 if self.playback_timer is not None:
                     self.playback_timer.cancel()
 
@@ -122,9 +125,13 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
         except Exception as e:
             structlog.get_logger().error("Playback error", error=str(e))
         finally:
+            token = self.current_stream_token
             with self.buffer_lock:
                 self.playback_started = False
                 self.audio_buffer.clear()
+                self.current_stream_token = None
+            if token and self.on_playback_complete:
+                self.on_playback_complete(token)
 
     def stop_playback(self) -> None:
         self.stop_flag.set()

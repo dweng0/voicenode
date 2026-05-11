@@ -4,6 +4,7 @@ from typing import Optional, Callable, Union
 from concurrent.futures import ThreadPoolExecutor
 
 from voicenode.ports import AudioFrame, VADState, VADEvent, TranscriberPort
+from voicenode.core.stop_word_detector import StopWordDetector
 
 
 @dataclass
@@ -268,10 +269,12 @@ class VoiceNodeApplication:
         else:
             self.transcriber = transcriber
 
+        self.stop_word_detector = StopWordDetector(server=server)
         self.buffered_frames: list[AudioFrame] = []
         self.utterance_start_time_ms: Optional[int] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.pending_utterances: list[str] = []
+        self.current_stream_token: Optional[str] = None
 
     def _format_timestamp(self, ms: int) -> str:
         total_seconds = ms // 1000
@@ -293,20 +296,25 @@ class VoiceNodeApplication:
     def _send_utterance(self, text: str) -> None:
         if self.server is None:
             return
-        
+
         message = {"type": "utterance", "text": text}
-        
+
         if self.server.is_connected():
             import asyncio
             try:
                 loop = asyncio.get_running_loop()
                 loop.call_soon_threadsafe(
-                    lambda: asyncio.ensure_future(self.server.send(message))
+                    lambda: asyncio.ensure_future(self._send_and_check_stop_word(message, text))
                 )
             except RuntimeError:
-                asyncio.run(self.server.send(message))
+                asyncio.run(self._send_and_check_stop_word(message, text))
         else:
             self.pending_utterances.append(text)
+
+    async def _send_and_check_stop_word(self, message: dict, text: str) -> None:
+        """Send utterance and check for stop-words."""
+        await self.server.send(message)
+        await self.stop_word_detector.check_utterance(text)
 
     def process_frame(self, frame: AudioFrame) -> Optional[VADEvent]:
         event = self.vad_tracker.process_frame(frame)
@@ -340,10 +348,26 @@ class VoiceNodeApplication:
         """Send all pending utterances to server."""
         if self.server is None:
             return
-        
+
         while self.pending_utterances and self.server.is_connected():
             text = self.pending_utterances.pop(0)
             await self.server.send({"type": "utterance", "text": text})
+
+    def _on_playback_complete(self, stream_token: str) -> None:
+        """Callback when TTS playback finishes."""
+        if self.server is None or not self.server.is_connected():
+            return
+
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(
+                    self.server.send({"type": "tts_stream_complete", "streamToken": stream_token})
+                )
+            )
+        except RuntimeError:
+            asyncio.run(self.server.send({"type": "tts_stream_complete", "streamToken": stream_token}))
 
     def stop(self):
         self.running = False
@@ -374,7 +398,7 @@ class VoiceNodeApplication:
                 print(f"TTS received: {size_bytes} bytes, device {device_name}")
 
                 try:
-                    audio_output.play(msg, device_id)
+                    audio_output.play(msg, device_id, stream_token=self.current_stream_token)
                     print(f"TTS playback started on device {device_name}")
                 except Exception as e:
                     print(f"TTS playback error on device {device_name}: {e}")
@@ -385,6 +409,11 @@ class VoiceNodeApplication:
                     await config_update_handler.handle_config_update(msg)
                 elif msg_type == "error":
                     logger.error("Server error", code=msg.get("code"), message=msg.get("message"))
+                elif msg_type == "tts_stream_start":
+                    self.current_stream_token = msg.get("streamToken")
+                    self.stop_word_detector.on_tts_stream_start()
+                elif msg_type == "tts_stream_end":
+                    self.stop_word_detector.on_tts_stream_end()
 
     async def _connect_and_register(self) -> None:
         await self.server.connect()
@@ -400,9 +429,13 @@ class VoiceNodeApplication:
             ack = await self.server.receive()
         await self.flush_pending_utterances()
 
-    async def run_async(self, audio_output) -> None:
+    async def run_async(self, audio_output=None) -> None:
         import asyncio
         import threading
+
+        if audio_output is None:
+            from voicenode.adapters import SounddeviceAudioAdapter
+            audio_output = SounddeviceAudioAdapter(on_playback_complete=self._on_playback_complete)
 
         self.running = True
         connection_manager = ConnectionManager()
@@ -457,7 +490,7 @@ class VoiceNodeApplication:
         from voicenode.adapters import SounddeviceAudioAdapter
 
         self.running = True
-        audio_adapter = SounddeviceAudioAdapter()
+        audio_adapter = SounddeviceAudioAdapter(on_playback_complete=self._on_playback_complete)
 
         device_config = self.config.devices["input"]
         # Extract index from DeviceIdentity or use directly if int
