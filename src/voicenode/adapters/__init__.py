@@ -10,6 +10,11 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
         self.current_stream = None
         self.playback_thread = None
         self.stop_flag = threading.Event()
+        self.audio_buffer = bytearray()
+        self.buffer_lock = threading.Lock()
+        self.playback_started = False
+        self.playback_timer = None
+        self.last_chunk_time = None
 
     def list_devices(self) -> list[AudioDevice]:
         import sounddevice as sd
@@ -55,46 +60,71 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
                 yield AudioFrame(data=data.tobytes(), timestamp_ms=timestamp_ms)
 
     def play(self, audio: bytes, device_id: int) -> None:
-        self.stop_playback()
-        
-        self.stop_flag.clear()
-        
-        def _play_internal():
-            import sounddevice as sd
-            import numpy as np
-            import structlog
+        import time
 
-            try:
-                audio_array = np.frombuffer(audio, dtype=np.int16)
-                
-                sample_rate = 24000
-                
-                self.current_stream = sd.OutputStream(
-                    device=device_id,
-                    samplerate=sample_rate,
-                    channels=1,
-                    dtype="int16",
-                )
-                
-                self.current_stream.start()
-                
-                chunk_size = 1024
-                offset = 0
-                while offset < len(audio_array) and not self.stop_flag.is_set():
-                    chunk = audio_array[offset:offset + chunk_size]
-                    self.current_stream.write(chunk)
-                    offset += chunk_size
-                
-                if not self.stop_flag.is_set():
-                    self.current_stream.stop()
-                
-                self.current_stream.close()
-                self.current_stream = None
-            except Exception as e:
-                structlog.get_logger().error("Playback error", error=str(e))
-        
-        self.playback_thread = threading.Thread(target=_play_internal, daemon=True)
-        self.playback_thread.start()
+        with self.buffer_lock:
+            self.audio_buffer.extend(audio)
+            self.last_chunk_time = time.time()
+
+            if not self.playback_started:
+                self.playback_started = True
+                if self.playback_timer is not None:
+                    self.playback_timer.cancel()
+
+                def _start_playback():
+                    self.stop_flag.clear()
+                    playback_thread = threading.Thread(
+                        target=self._playback_loop,
+                        args=(device_id,),
+                        daemon=False
+                    )
+                    playback_thread.start()
+                    self.playback_thread = playback_thread
+
+                self.playback_timer = threading.Timer(0.02, _start_playback)
+                self.playback_timer.start()
+
+    def _playback_loop(self, device_id: int) -> None:
+        import sounddevice as sd
+        import numpy as np
+        import structlog
+        import time
+
+        try:
+            stream = sd.OutputStream(
+                device=device_id,
+                samplerate=22050,
+                channels=1,
+                dtype="int16",
+            )
+
+            stream.start()
+
+            chunk_size = 4096
+            while not self.stop_flag.is_set():
+                with self.buffer_lock:
+                    if len(self.audio_buffer) == 0:
+                        if time.time() - self.last_chunk_time > 0.5:
+                            break
+                        buffer_data = None
+                    else:
+                        buffer_data = bytes(self.audio_buffer[:chunk_size])
+                        del self.audio_buffer[:chunk_size]
+
+                if buffer_data:
+                    audio_array = np.frombuffer(buffer_data, dtype=np.int16)
+                    stream.write(audio_array)
+                else:
+                    time.sleep(0.01)
+
+            stream.stop()
+            stream.close()
+        except Exception as e:
+            structlog.get_logger().error("Playback error", error=str(e))
+        finally:
+            with self.buffer_lock:
+                self.playback_started = False
+                self.audio_buffer.clear()
 
     def stop_playback(self) -> None:
         self.stop_flag.set()

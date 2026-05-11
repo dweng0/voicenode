@@ -351,18 +351,34 @@ class VoiceNodeApplication:
 
     async def _receive_loop(self, audio_output) -> None:
         import structlog
+        import traceback
         logger = structlog.get_logger()
         config_update_handler = ConfigUpdateHandler(
             config_adapter=self.config_adapter,
             server=self.server,
         )
+
+        # Cache device list for name lookup
+        devices = audio_output.list_devices()
+        device_map = {d.id: d.name for d in devices}
+
         while self.running:
             msg = await self.server.receive()
             if isinstance(msg, bytes):
                 device_config = self.config.devices.get("output", 0)
                 # Extract index from DeviceIdentity or use directly if int
                 device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
-                audio_output.play(msg, device_id)
+                device_name = device_map.get(device_id, f"unknown (id={device_id})")
+                size_bytes = len(msg)
+
+                print(f"TTS received: {size_bytes} bytes, device {device_name}")
+
+                try:
+                    audio_output.play(msg, device_id)
+                    print(f"TTS playback started on device {device_name}")
+                except Exception as e:
+                    print(f"TTS playback error on device {device_name}: {e}")
+                    traceback.print_exc()
             elif isinstance(msg, dict):
                 msg_type = msg.get("type")
                 if msg_type == "config_update":
