@@ -179,3 +179,61 @@ async def test_detector_logs_token_mismatch_warning(mock_server, caplog):
     # Should have warning in logs mentioning mismatch
     assert any("token" in record.message.lower() and "mismatch" in record.message.lower()
                for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_stream_start_event(mock_server, caplog):
+    """Log info-level event when stream starts."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.INFO)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-abc-123")
+
+    # Should have info log about stream start
+    assert any("stream" in record.message.lower() and "start" in record.message.lower()
+               for record in caplog.records if record.levelno == logging.INFO)
+    # Token should be in the log
+    assert any("token-abc-123" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_stream_end_event(mock_server, caplog):
+    """Log info-level event when stream ends."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.INFO)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-xyz-789")
+    caplog.clear()  # Clear start log
+    detector.on_tts_stream_end(stream_token="token-xyz-789")
+
+    # Should have info log about stream end
+    assert any("stream" in record.message.lower() and "end" in record.message.lower()
+               for record in caplog.records if record.levelno == logging.INFO)
+    # Token should be in the log
+    assert any("token-xyz-789" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_timeout_event(mock_server, caplog):
+    """Log info-level event when stream timeout occurs."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.INFO)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-timeout")
+    caplog.clear()  # Clear start log
+
+    # Manually trigger timeout
+    detector.on_timeout()
+
+    # Should have info log about timeout
+    assert any("timeout" in record.message.lower() or "stream" in record.message.lower()
+               for record in caplog.records if record.levelno == logging.INFO)

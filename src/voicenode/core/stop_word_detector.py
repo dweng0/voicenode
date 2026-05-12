@@ -23,18 +23,21 @@ class StopWordDetector:
         """Signal start of TTS stream — begin listening."""
         self.is_listening = True
         self._current_stream_token = stream_token
+        logger.info(f"Stream start: {stream_token}")
         self._start_timeout()
 
     def on_tts_stream_end(self, stream_token: Optional[str] = None) -> None:
         """Signal end of TTS stream — stop listening."""
         if stream_token and self._current_stream_token and stream_token != self._current_stream_token:
             logger.warning(f"Stream token mismatch: expected {self._current_stream_token}, got {stream_token}")
+        logger.info(f"Stream end: {stream_token}")
         self.is_listening = False
         self._current_stream_token = None
         self._cancel_timeout()
 
     def on_timeout(self) -> None:
         """Timeout expired — stop listening."""
+        logger.info(f"Stream timeout (auto-restore listening after {self.TIMEOUT_SECONDS}s)")
         self.is_listening = False
         self._timeout_task = None
 
