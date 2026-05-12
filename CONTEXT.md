@@ -76,20 +76,24 @@ listening=False (normal) ←→ listening=True (stream gate)
 1. **Server sends tts_stream_start** (with streamToken)
    - Pi calls `detector.on_tts_stream_start(stream_token)`
    - Transition: `listening=False → listening=True`
-   - Effect: `check_utterance()` only sends server signal if stop-word matches
+   - Effect: Gate activated — suppress ambient utterances, only send stop-word signals
    - Starts 30s timeout as fallback
 
 2. **Pi detects utterance during stream** (from transcriber)
-   - Calls `detector.check_utterance(text)`
-   - Only sends `stop_word` signal if `is_listening=True` AND text matches stop-word list
-   - Ambient speech is suppressed (checked but not reported)
+   - Checks detector state via `is_listening`
+   - If `is_listening=True` (stream gate active):
+     - Suppress utterance (don't send to server)
+     - Check if text matches stop-word
+     - If match: send `stop_word` signal; if not: silent discard
+   - If `is_listening=False`: send utterance normally
+   - Prevents ambient speech from interrupting TTS playback
 
 3. **Server sends tts_stream_end** (with matching streamToken)
    - Pi calls `detector.on_tts_stream_end(stream_token)`
    - Validates token matches original stream start (warns if mismatch)
    - Transition: `listening=True → listening=False`
    - Cancels timeout (stream ended normally)
-   - Effect: Normal listening resumes on next utterance
+   - Effect: Normal listening resumes (all utterances sent to server)
 
 ### Edge Cases
 
