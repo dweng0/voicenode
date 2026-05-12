@@ -273,3 +273,44 @@ async def test_detector_logs_listening_mode_change_to_normal(mock_server, caplog
     assert any(("listening" in record.message.lower() and "restore" in record.message.lower()) or
                ("mode" in record.message.lower() and "normal" in record.message.lower())
                for record in caplog.records if record.levelno == logging.INFO)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_double_start_warning(mock_server, caplog):
+    """Log warning when stream_start called twice without end."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.WARNING)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-first")
+    caplog.clear()  # Clear first start log
+
+    # Call start again without end
+    detector.on_tts_stream_start(stream_token="token-second")
+
+    # Should have warning about double-start
+    assert any("double" in record.message.lower() or "already" in record.message.lower()
+               for record in caplog.records if record.levelno == logging.WARNING)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_double_end_warning(mock_server, caplog):
+    """Log warning when stream_end called twice."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.WARNING)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-123")
+    detector.on_tts_stream_end(stream_token="token-123")
+    caplog.clear()  # Clear first end log
+
+    # Call end again with same token
+    detector.on_tts_stream_end(stream_token="token-123")
+
+    # Should have warning about double-end or "not active"
+    assert any("double" in record.message.lower() or "not active" in record.message.lower()
+               for record in caplog.records if record.levelno == logging.WARNING)

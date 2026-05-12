@@ -21,6 +21,8 @@ class StopWordDetector:
 
     def on_tts_stream_start(self, stream_token: Optional[str] = None) -> None:
         """Signal start of TTS stream — begin listening."""
+        if self.is_listening:
+            logger.warning(f"Double stream start: already listening. Previous: {self._current_stream_token}, new: {stream_token}")
         self.is_listening = True
         self._current_stream_token = stream_token
         logger.info(f"Stream start: {stream_token} — listening mode: gate (stop-word only)")
@@ -30,6 +32,8 @@ class StopWordDetector:
         """Signal end of TTS stream — stop listening."""
         if stream_token and self._current_stream_token and stream_token != self._current_stream_token:
             logger.warning(f"Stream token mismatch: expected {self._current_stream_token}, got {stream_token}")
+        if not self.is_listening:
+            logger.warning(f"Double stream end: not currently listening. Token: {stream_token}")
         logger.info(f"Stream end: {stream_token} — listening mode: restore (normal)")
         self.is_listening = False
         self._current_stream_token = None
