@@ -28,6 +28,9 @@ Binary PCM audio (22050 Hz, 16-bit signed LE, mono) sent from housekeeper to Voi
 ### VAD (Voice Activity Detection)
 webrtcvad-based detection of speech start/end. Determines when to transcribe. Uses aggressiveness mode and silence duration threshold.
 
+### Stream Lifecycle
+Messages sent by housekeeper when TTS streaming begins and ends: `tts_stream_start` (with streamToken) signals Pi to gate stop-word detection (suppress ambient listening, only match stop-words). `tts_stream_end` (with streamToken) signals Pi to restore normal listening. Defense-in-depth with server-side mode switching (see ADR 0011 in housekeeper). Full spec: `../housekeeper/docs/voice-node-protocol.md` (Server → Node messages).
+
 ## Architecture
 
 Hexagonal architecture with domain core and adapters:
@@ -52,6 +55,9 @@ Hexagonal architecture with domain core and adapters:
 - Events: `SpeechBoundaryDetected`, `UtteranceReady`, `TTSReceived`, `ConnectionLost`
 - `VoiceNodeApplication` — orchestrates ports, drives flow
 
+**Stop-word Detection Gate:**
+During TTS playback (when `tts_stream_start` arrives), Pi must suppress ambient listening and only match stop-words (see CONTEXT glossary for "Stream Lifecycle"). This gates stop-word detection at the Pi level. The server also gates listening window mode server-side (ADR 0011) — defense-in-depth ensures no ambient utterances leak through if either layer fails.
+
 ## Protocol Summary
 
 **Node → Server:**
@@ -62,6 +68,8 @@ Hexagonal architecture with domain core and adapters:
 **Server → Node:**
 - `registered` — confirmation with status (new/reconnected)
 - `config_update` — remote change to label, location, active devices
+- `tts_stream_start` — TTS stream beginning (with streamToken); Pi gates stop-word detection
+- `tts_stream_end` — TTS stream ending (with streamToken); Pi restores normal listening
 - `tts` — binary PCM audio
 - `error` — rejection with code and message
 
