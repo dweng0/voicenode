@@ -1,105 +1,145 @@
-"""Test AEC engine reference buffer and echo cancellation."""
+"""Test AEC engine reference buffering and echo cancellation wrapper."""
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 
 
 @pytest.fixture
-def mock_webrtc():
-    """Mock WebRTC AEC library."""
+def mock_ap():
+    """Mock the WebRTC AudioProcessingModule."""
     with patch("voicenode.audio.aec_engine.HAS_WEBRTC", True), \
-         patch("voicenode.audio.aec_engine.WebRtcAec") as mock_class:
-        mock_instance = Mock()
-        mock_class.return_value = mock_instance
-        yield mock_instance
+         patch("voicenode.audio.aec_engine._AudioProcessingModule") as mock_class:
+        instance = Mock()
+        mock_class.return_value = instance
+        yield instance
 
 
-def test_aec_engine_buffers_reference_chunk(mock_webrtc):
-    """Reference chunks are buffered by timestamp."""
+def test_add_reference_chunks_into_10ms_frames(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME
+
+    engine = AecEngine()
+    # 30ms of audio = 3 x 10ms frames
+    engine.add_reference_chunk(b"\x00" * (BYTES_PER_FRAME * 3))
+    assert len(engine._ref_queue) == 3
+
+
+def test_add_reference_carries_partial_frame_residual(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME
+
+    engine = AecEngine()
+    # 15ms (1.5 frames). One full frame queued, 0.5 frame stored as residual.
+    engine.add_reference_chunk(b"\x01" * (BYTES_PER_FRAME + BYTES_PER_FRAME // 2))
+    assert len(engine._ref_queue) == 1
+    assert len(engine._ref_residual) == BYTES_PER_FRAME // 2
+    # Next 5ms completes the second frame
+    engine.add_reference_chunk(b"\x02" * (BYTES_PER_FRAME // 2))
+    assert len(engine._ref_queue) == 2
+    assert engine._ref_residual == b""
+
+
+def test_cancel_echo_feeds_reverse_then_processes_stream(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME
+
+    mock_ap.process_stream.side_effect = lambda b: b  # identity for assert
+    engine = AecEngine()
+    engine.add_reference_chunk(b"R" * BYTES_PER_FRAME)
+
+    mic = b"M" * BYTES_PER_FRAME
+    out = engine.cancel_echo(mic, timestamp_ms=0)
+
+    mock_ap.process_reverse_stream.assert_called_once_with(b"R" * BYTES_PER_FRAME)
+    mock_ap.process_stream.assert_called_once_with(mic)
+    assert out == mic
+
+
+def test_cancel_echo_chunks_30ms_into_three_10ms_calls(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME
+
+    mock_ap.process_stream.side_effect = lambda b: b
+    engine = AecEngine()
+    mic = b"\x10" * (BYTES_PER_FRAME * 3)
+    out = engine.cancel_echo(mic)
+    assert mock_ap.process_stream.call_count == 3
+    assert out == mic
+
+
+def test_cancel_echo_passthrough_when_no_webrtc():
+    with patch("voicenode.audio.aec_engine.HAS_WEBRTC", False), \
+         patch("voicenode.audio.aec_engine._AudioProcessingModule", None):
+        from voicenode.audio.aec_engine import AecEngine
+
+        engine = AecEngine()
+        mic = b"\x00" * 640
+        assert engine.cancel_echo(mic) == mic
+
+
+def test_cancel_echo_passthrough_on_unaligned_mic(mock_ap):
     from voicenode.audio.aec_engine import AecEngine
 
-    engine = AecEngine(sample_rate=16000)
-
-    # Add reference at timestamp 1000ms
-    ref_audio = b"fake_audio_data_1000"
-    engine.add_reference_chunk(timestamp_ms=1000, audio=ref_audio)
-
-    # Buffer should contain the chunk
-    assert engine._reference_buffer.get(1000) == ref_audio
+    engine = AecEngine()
+    mic = b"\x00" * 333  # not multiple of 640
+    out = engine.cancel_echo(mic)
+    assert out == mic
+    mock_ap.process_stream.assert_not_called()
 
 
-def test_aec_engine_cancel_echo_returns_residual(mock_webrtc):
-    """Echo cancellation returns residual audio."""
-    from voicenode.audio.aec_engine import AecEngine
+def test_stream_end_clears_buffer(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME
 
-    engine = AecEngine(sample_rate=16000)
-
-    # Add reference
-    ref_audio = b"reference_audio_1000"
-    engine.add_reference_chunk(timestamp_ms=1000, audio=ref_audio)
-
-    # Mock WebRTC to return residual
-    residual = b"residual_audio"
-    mock_webrtc.process_frame.return_value = residual
-
-    # Cancel echo
-    mic_audio = b"mic_input_with_echo"
-    result = engine.cancel_echo(mic_audio=mic_audio, timestamp_ms=1000)
-
-    assert result == residual
-    mock_webrtc.process_frame.assert_called_once()
-
-
-def test_aec_engine_cleans_old_frames_on_ttl(mock_webrtc):
-    """Old frames removed after TTL expires."""
-    from voicenode.audio.aec_engine import AecEngine
-
-    engine = AecEngine(sample_rate=16000, reference_ttl_ms=5000)
-
-    # Add reference at 1000ms
-    engine.add_reference_chunk(timestamp_ms=1000, audio=b"old_audio")
-
-    # Add at 6100ms (1100ms past TTL)
-    engine.add_reference_chunk(timestamp_ms=6100, audio=b"new_audio")
-
-    # Old frame should be removed
-    assert 1000 not in engine._reference_buffer
-    assert 6100 in engine._reference_buffer
-
-
-def test_aec_engine_timestamp_lookup_tolerance(mock_webrtc):
-    """Timestamp lookup matches within ±100ms tolerance."""
-    from voicenode.audio.aec_engine import AecEngine
-
-    engine = AecEngine(sample_rate=16000)
-
-    # Add reference at 1000ms
-    ref_audio = b"reference_at_1000"
-    engine.add_reference_chunk(timestamp_ms=1000, audio=ref_audio)
-
-    # Mock WebRTC
-    residual = b"result"
-    mock_webrtc.process_frame.return_value = residual
-
-    # Query at 1050ms (within ±100ms) should find 1000ms
-    result = engine.cancel_echo(mic_audio=b"mic", timestamp_ms=1050)
-
-    assert result == residual
-    mock_webrtc.process_frame.assert_called_once()
-
-
-def test_aec_engine_stream_end_clears_buffer(mock_webrtc):
-    """Stream end clears reference buffer."""
-    from voicenode.audio.aec_engine import AecEngine
-
-    engine = AecEngine(sample_rate=16000)
-
-    # Add references
-    engine.add_reference_chunk(timestamp_ms=1000, audio=b"ref1")
-    engine.add_reference_chunk(timestamp_ms=2000, audio=b"ref2")
-    assert len(engine._reference_buffer) == 2
-
-    # End stream
+    engine = AecEngine()
+    engine.add_reference_chunk(b"\x00" * (BYTES_PER_FRAME * 2))
+    engine._ref_residual = b"\x01" * 10
     engine.on_stream_end()
+    assert len(engine._ref_queue) == 0
+    assert engine._ref_residual == b""
 
-    # Buffer should be empty
-    assert len(engine._reference_buffer) == 0
+
+def test_resample_pcm_24k_to_16k_changes_sample_count():
+    from voicenode.audio.aec_engine import resample_pcm_s16
+    import numpy as np
+
+    src = np.zeros(2400, dtype=np.int16).tobytes()  # 100ms at 24kHz
+    out = resample_pcm_s16(src, 24000, 16000)
+    # 100ms at 16k = 1600 samples = 3200 bytes
+    assert len(out) == 3200
+
+
+def test_resample_passthrough_when_rates_equal():
+    from voicenode.audio.aec_engine import resample_pcm_s16
+
+    src = b"\x01\x02" * 480
+    assert resample_pcm_s16(src, 16000, 16000) is src
+
+
+def test_add_reference_resamples_when_source_rate_differs(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, BYTES_PER_FRAME, SAMPLE_RATE
+    import numpy as np
+
+    engine = AecEngine()
+    # 100ms at 24kHz = 4800 bytes. Resampled to 16k = 3200 bytes = 5 frames.
+    src = np.zeros(2400, dtype=np.int16).tobytes()
+    engine.add_reference_chunk(src, source_rate=24000)
+    assert len(engine._ref_queue) == 3200 // BYTES_PER_FRAME
+
+
+def test_add_reference_handles_odd_byte_chunks(mock_ap):
+    """Streamed PCM chunks may have odd byte counts; engine must not crash."""
+    from voicenode.audio.aec_engine import AecEngine
+
+    engine = AecEngine()
+    # 641-byte chunk: odd. Should not raise.
+    engine.add_reference_chunk(b"\x00" * 641, source_rate=24000)
+    # Next chunk carries the orphan byte forward.
+    engine.add_reference_chunk(b"\x00" * 5, source_rate=24000)
+    # No crash; AP not yet called (no mic frame), but residual handled.
+    assert engine._ref_byte_residual in (b"", b"\x00")
+
+
+def test_configures_ap_on_init(mock_ap):
+    from voicenode.audio.aec_engine import AecEngine, SAMPLE_RATE
+
+    AecEngine(aec_level=2, ns_level=1)
+    mock_ap.set_stream_format.assert_called_once_with(SAMPLE_RATE, 1)
+    mock_ap.set_reverse_stream_format.assert_called_once_with(SAMPLE_RATE, 1)
+    mock_ap.set_aec_level.assert_called_once_with(2)
+    mock_ap.set_ns_level.assert_called_once_with(1)

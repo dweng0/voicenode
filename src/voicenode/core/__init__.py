@@ -280,6 +280,9 @@ class VoiceNodeApplication:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.pending_utterances: list[str] = []
         self.current_stream_token: Optional[str] = None
+        self.current_stream_is_aec_ref: bool = False  # legacy (Option A); kept for tests
+        self.current_stream_use_for_aec: bool = False
+        self.current_stream_sample_rate: int = 24000
         self.pending_audio_frames: list[bytes] = []  # Queue for audio until stream_start
 
     def _format_timestamp(self, ms: int) -> str:
@@ -332,8 +335,13 @@ class VoiceNodeApplication:
         await self.stop_word_detector.check_utterance(text)
 
     def process_frame(self, frame: AudioFrame) -> Optional[VADEvent]:
+        # Echo-cancel mic audio against buffered TTS reference.
+        cancelled = self.aec_engine.cancel_echo(frame.data, timestamp_ms=frame.timestamp_ms)
+        if cancelled is not frame.data:
+            frame = AudioFrame(data=cancelled, timestamp_ms=frame.timestamp_ms)
+
         event = self.vad_tracker.process_frame(frame)
-        
+
         if self.vad_tracker.current_state == VADState.SPEECH:
             self.buffered_frames.append(frame)
             if self.utterance_start_time_ms is None:
@@ -404,26 +412,40 @@ class VoiceNodeApplication:
         while self.running:
             msg = await self.server.receive()
             if isinstance(msg, bytes):
+                # Legacy AEC-only stream (Option A): chunk goes to AEC, not speaker.
+                if self.current_stream_is_aec_ref:
+                    self.aec_engine.add_reference_chunk(
+                        msg, source_rate=self.current_stream_sample_rate
+                    )
+                    continue
+
+                # Tee: feed AEC reference if server flagged this stream for AEC.
+                if self.current_stream_use_for_aec:
+                    self.aec_engine.add_reference_chunk(
+                        msg, source_rate=self.current_stream_sample_rate
+                    )
+
                 device_config = self.config.devices.get("output", 0)
-                # Extract index from DeviceIdentity or use directly if int
                 device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
                 device_name = device_map.get(device_id, f"unknown (id={device_id})")
                 size_bytes = len(msg)
 
-                # Queue audio until stream_start received. Prevents playback before
-                # gating is activated, which would cause microphone echo to be
-                # captured as ambient utterance.
+                # Queue audio until stream_start gate activates. Prevents playback before
+                # gating, which would cause mic echo to be captured as ambient utterance.
                 if self.stop_word_detector.is_listening:
-                    # Stream is active, play immediately
                     print(f"TTS received: {size_bytes} bytes, device {device_name}")
                     try:
-                        audio_output.play(msg, device_id, stream_token=self.current_stream_token)
+                        audio_output.play(
+                            msg,
+                            device_id,
+                            stream_token=self.current_stream_token,
+                            sample_rate=self.current_stream_sample_rate,
+                        )
                         print(f"TTS playback started on device {device_name}")
                     except Exception as e:
                         print(f"TTS playback error on device {device_name}: {e}")
                         traceback.print_exc()
                 else:
-                    # Stream not yet active, queue for later
                     print(f"TTS queued: {size_bytes} bytes (waiting for stream_start)")
                     self.pending_audio_frames.append(msg)
             elif isinstance(msg, dict):
@@ -434,7 +456,17 @@ class VoiceNodeApplication:
                     logger.error("Server error", code=msg.get("code"), message=msg.get("message"))
                 elif msg_type == "tts_stream_start":
                     stream_token = msg.get("streamToken")
+                    is_aec_ref = bool(msg.get("isAecReference", False))
                     self.current_stream_token = stream_token
+                    self.current_stream_is_aec_ref = is_aec_ref
+                    self.current_stream_use_for_aec = bool(msg.get("useForAec", False))
+                    self.current_stream_sample_rate = int(msg.get("sampleRate", 24000))
+
+                    if is_aec_ref:
+                        logger.info(f"AEC reference stream start: {stream_token}")
+                        # Do NOT activate stop_word_detector gate — AEC stream is silent to user.
+                        continue
+
                     self.stop_word_detector.on_tts_stream_start(stream_token=stream_token)
                     # Flush queued audio frames now that gate is active
                     while self.pending_audio_frames:
@@ -444,50 +476,37 @@ class VoiceNodeApplication:
                         device_name = device_map.get(device_id, f"unknown (id={device_id})")
                         size_bytes = len(audio_data)
                         print(f"TTS queued flush: {size_bytes} bytes, device {device_name}")
+                        if self.current_stream_use_for_aec:
+                            self.aec_engine.add_reference_chunk(
+                                audio_data, source_rate=self.current_stream_sample_rate
+                            )
                         try:
-                            audio_output.play(audio_data, device_id, stream_token=self.current_stream_token)
+                            audio_output.play(
+                                audio_data,
+                                device_id,
+                                stream_token=self.current_stream_token,
+                                sample_rate=self.current_stream_sample_rate,
+                            )
                             print(f"TTS playback started (from queue)")
                         except Exception as e:
                             print(f"TTS playback error: {e}")
                             traceback.print_exc()
-                elif msg_type == "tts_stream":
-                    # Route AEC reference vs playback audio
-                    is_aec_ref = msg.get("isAecReference", False)
-                    timestamp = msg.get("timestamp")
-                    audio = msg.get("audio")
-                    stream_token = msg.get("streamToken")
-
-                    if not audio:
-                        logger.warning("tts_stream message missing audio data")
-                    elif is_aec_ref:
-                        logger.info(f"AEC reference chunk at timestamp {timestamp}ms")
-                        self.aec_engine.add_reference_chunk(timestamp_ms=timestamp, audio=audio)
-                    else:
-                        # Route to playback
-                        device_config = self.config.devices.get("output", 0)
-                        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
-                        device_name = device_map.get(device_id, f"unknown (id={device_id})")
-                        size_bytes = len(audio) if audio else 0
-
-                        if self.stop_word_detector.is_listening:
-                            logger.info(f"TTS playback chunk at timestamp {timestamp}ms: {size_bytes} bytes")
-                            try:
-                                audio_output.play(audio, device_id, stream_token=stream_token)
-                            except Exception as e:
-                                logger.error(f"TTS playback error on device {device_name}: {e}")
-                        else:
-                            logger.info(f"TTS queued chunk at timestamp {timestamp}ms (waiting for stream_start)")
-                            self.pending_audio_frames.append(audio)
-
                 elif msg_type == "tts_stream_end":
                     stream_token = msg.get("streamToken")
-                    self.stop_word_detector.on_tts_stream_end(stream_token=stream_token)
-                    # Clear AEC reference buffer on stream end
-                    self.aec_engine.on_stream_end()
-                    # Discard queued audio on stream end (stream ended before start)
-                    if self.pending_audio_frames:
-                        logger.warning(f"Discarding {len(self.pending_audio_frames)} queued audio frames on stream end")
-                        self.pending_audio_frames.clear()
+                    if self.current_stream_is_aec_ref:
+                        self.aec_engine.on_stream_end()
+                    else:
+                        if self.current_stream_use_for_aec:
+                            self.aec_engine.on_stream_end()
+                        self.stop_word_detector.on_tts_stream_end(stream_token=stream_token)
+                        if self.pending_audio_frames:
+                            logger.warning(
+                                f"Discarding {len(self.pending_audio_frames)} queued audio frames on stream end"
+                            )
+                            self.pending_audio_frames.clear()
+                    self.current_stream_is_aec_ref = False
+                    self.current_stream_use_for_aec = False
+                    self.current_stream_token = None
 
     async def _connect_and_register(self) -> None:
         await self.server.connect()
@@ -533,7 +552,15 @@ class VoiceNodeApplication:
             except asyncio.CancelledError:
                 self.running = False
                 raise
-            except Exception:
+            except Exception as e:
+                import traceback
+                import structlog
+                structlog.get_logger().error(
+                    "Receive loop exception",
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=traceback.format_exc(),
+                )
                 connection_manager.log_lost()
                 connection_manager.increment_reconnect()
                 delay = connection_manager.get_backoff_delay(attempt)

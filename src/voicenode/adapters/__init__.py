@@ -61,7 +61,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
                 timestamp_ms = int((time.time() - start_time) * 1000)
                 yield AudioFrame(data=data.tobytes(), timestamp_ms=timestamp_ms)
 
-    def play(self, audio: bytes, device_id: int, stream_token: str = None) -> None:
+    def play(self, audio: bytes, device_id: int, stream_token: str = None, sample_rate: int = 24000) -> None:
         import time
 
         with self.buffer_lock:
@@ -71,6 +71,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
             if not self.playback_started:
                 self.playback_started = True
                 self.current_stream_token = stream_token
+                self.current_sample_rate = sample_rate
                 if self.playback_timer is not None:
                     self.playback_timer.cancel()
 
@@ -78,7 +79,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
                     self.stop_flag.clear()
                     playback_thread = threading.Thread(
                         target=self._playback_loop,
-                        args=(device_id,),
+                        args=(device_id, sample_rate),
                         daemon=False
                     )
                     playback_thread.start()
@@ -87,7 +88,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
                 self.playback_timer = threading.Timer(0.02, _start_playback)
                 self.playback_timer.start()
 
-    def _playback_loop(self, device_id: int) -> None:
+    def _playback_loop(self, device_id: int, sample_rate: int = 24000) -> None:
         import sounddevice as sd
         import numpy as np
         import structlog
@@ -96,7 +97,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
         try:
             stream = sd.OutputStream(
                 device=device_id,
-                samplerate=22050,
+                samplerate=sample_rate,
                 channels=1,
                 dtype="int16",
             )
