@@ -45,6 +45,14 @@ class StopWordDetector:
         self.is_listening = False
         self._timeout_task = None
 
+    def on_disconnect(self) -> None:
+        """Disconnect detected — implicit stream end."""
+        if self.is_listening:
+            logger.info(f"Stream disconnect (implicit end): {self._current_stream_token}")
+        self.is_listening = False
+        self._current_stream_token = None
+        self._cancel_timeout()
+
     def _start_timeout(self) -> None:
         """Start 30-second timeout to auto-stop listening."""
         self._cancel_timeout()

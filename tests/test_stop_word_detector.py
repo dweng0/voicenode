@@ -314,3 +314,76 @@ async def test_detector_logs_double_end_warning(mock_server, caplog):
     # Should have warning about double-end or "not active"
     assert any("double" in record.message.lower() or "not active" in record.message.lower()
                for record in caplog.records if record.levelno == logging.WARNING)
+
+
+@pytest.mark.asyncio
+async def test_detector_stress_test_random_message_order(mock_server):
+    """Stress test: send messages in various orders, verify listening state consistency."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+
+    # Scenario 1: Normal start-end
+    detector.on_tts_stream_start(stream_token="s1")
+    assert detector.is_listening is True
+    detector.on_tts_stream_end(stream_token="s1")
+    assert detector.is_listening is False
+
+    # Scenario 2: Out-of-order (end before start)
+    detector.on_tts_stream_end(stream_token="s2")
+    assert detector.is_listening is False
+
+    # Scenario 3: Start after orphan end
+    detector.on_tts_stream_start(stream_token="s3")
+    assert detector.is_listening is True
+
+    # Scenario 4: Multiple starts (no double-gating)
+    detector.on_tts_stream_start(stream_token="s4")
+    assert detector.is_listening is True
+    detector.on_tts_stream_start(stream_token="s5")
+    assert detector.is_listening is True  # Still listening, not locked up
+
+    # Scenario 5: End the double-started stream
+    detector.on_tts_stream_end(stream_token="s5")
+    assert detector.is_listening is False
+
+    # Scenario 6: Multiple ends (no crash)
+    detector.on_tts_stream_end(stream_token="orphan")
+    assert detector.is_listening is False
+
+    # Scenario 7: Rapid start-end-start cycles
+    for i in range(3):
+        token = f"rapid-{i}"
+        detector.on_tts_stream_start(stream_token=token)
+        assert detector.is_listening is True
+        detector.on_tts_stream_end(stream_token=token)
+        assert detector.is_listening is False
+
+    # Final state: should be listening=False and no active token
+    assert detector.is_listening is False
+    assert detector._current_stream_token is None
+
+
+@pytest.mark.asyncio
+async def test_detector_disconnect_recovery_implicit_end(mock_server):
+    """Handle disconnect during stream: implicit stream_end on reconnect."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+
+    # Stream starts normally
+    detector.on_tts_stream_start(stream_token="token-active")
+    assert detector.is_listening is True
+
+    # Disconnect happens (connection lost, implicit end)
+    detector.on_disconnect()
+
+    # After disconnect, listening restored (no longer gated)
+    assert detector.is_listening is False
+    assert detector._current_stream_token is None
+
+    # Can start new stream after reconnect
+    detector.on_tts_stream_start(stream_token="token-new")
+    assert detector.is_listening is True
+    detector.on_tts_stream_end(stream_token="token-new")
+    assert detector.is_listening is False

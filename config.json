@@ -6,13 +6,13 @@
   "whisper_model": "base.en",
   "devices": {
     "input": {
-      "name": "pulse",
-      "index": 5,
+      "name": "default",
+      "index": 4,
       "serial": null
     },
     "output": {
-      "name": "pulse",
-      "index": 5,
+      "name": "default",
+      "index": 4,
       "serial": null
     }
   },
@@ -24,5 +24,7 @@
   "capabilities": [
     "mic",
     "speaker"
-  ]
+  ],
+  "stt_mode": "local",
+  "server_http_url": null
 }
