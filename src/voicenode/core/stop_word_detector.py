@@ -1,7 +1,10 @@
 """Stop-word detector state machine for TTS stream interruption."""
 import asyncio
+import logging
 from typing import Optional
 from voicenode.core.stop_word_matcher import StopWordMatcher
+
+logger = logging.getLogger(__name__)
 
 
 class StopWordDetector:
@@ -24,6 +27,8 @@ class StopWordDetector:
 
     def on_tts_stream_end(self, stream_token: Optional[str] = None) -> None:
         """Signal end of TTS stream — stop listening."""
+        if stream_token and self._current_stream_token and stream_token != self._current_stream_token:
+            logger.warning(f"Stream token mismatch: expected {self._current_stream_token}, got {stream_token}")
         self.is_listening = False
         self._current_stream_token = None
         self._cancel_timeout()

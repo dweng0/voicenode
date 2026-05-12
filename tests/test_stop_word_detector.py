@@ -159,3 +159,23 @@ async def test_detector_detects_token_mismatch(mock_server):
     # End stream with DIFFERENT token — should still end but log warning
     detector.on_tts_stream_end(stream_token="token-456")
     assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_token_mismatch_warning(mock_server, caplog):
+    """Log warning when streamToken doesn't match between start and end."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.WARNING)
+    detector = StopWordDetector(server=mock_server)
+
+    # Start with token-123
+    detector.on_tts_stream_start(stream_token="token-123")
+
+    # End with token-456 (mismatch)
+    detector.on_tts_stream_end(stream_token="token-456")
+
+    # Should have warning in logs mentioning mismatch
+    assert any("token" in record.message.lower() and "mismatch" in record.message.lower()
+               for record in caplog.records)
