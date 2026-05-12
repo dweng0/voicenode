@@ -237,3 +237,39 @@ async def test_detector_logs_timeout_event(mock_server, caplog):
     # Should have info log about timeout
     assert any("timeout" in record.message.lower() or "stream" in record.message.lower()
                for record in caplog.records if record.levelno == logging.INFO)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_listening_mode_change_to_gated(mock_server, caplog):
+    """Log when listening transitions to gated (stop-word only) mode."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.INFO)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-123")
+
+    # Should have log mentioning listening mode or gate
+    assert any(("listening" in record.message.lower() and "gate" in record.message.lower()) or
+               ("mode" in record.message.lower() and "stop" in record.message.lower())
+               for record in caplog.records if record.levelno == logging.INFO)
+
+
+@pytest.mark.asyncio
+async def test_detector_logs_listening_mode_change_to_normal(mock_server, caplog):
+    """Log when listening transitions back to normal mode."""
+    import logging
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    caplog.set_level(logging.INFO)
+    detector = StopWordDetector(server=mock_server)
+
+    detector.on_tts_stream_start(stream_token="token-123")
+    caplog.clear()  # Clear start log
+    detector.on_tts_stream_end(stream_token="token-123")
+
+    # Should have log mentioning restore or normal mode
+    assert any(("listening" in record.message.lower() and "restore" in record.message.lower()) or
+               ("mode" in record.message.lower() and "normal" in record.message.lower())
+               for record in caplog.records if record.levelno == logging.INFO)
