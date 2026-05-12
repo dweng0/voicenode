@@ -104,7 +104,10 @@ class AecEngine:
             self.ap.set_aec_level(aec_level)
             self.ap.set_ns_level(ns_level)
             try:
-                self.ap.set_system_delay(0)
+                # Delay (ms) between reference fed to APM and echo appearing in mic.
+                # Accounts for sounddevice output buffer + acoustic propagation on Pi.
+                # Tune: if echo persists try higher (150); if voice is clipped try lower (50).
+                self.ap.set_system_delay(100)
             except Exception:
                 pass
         else:
@@ -141,7 +144,7 @@ class AecEngine:
         self._ref_residual = data[n_frames * BYTES_PER_FRAME :]
 
     def cancel_echo(self, mic_audio: bytes, timestamp_ms: Optional[int] = None) -> bytes:
-        """Run AEC on mic audio. Drains pending reference frames first.
+        """Run AEC on mic audio. Interleaves one reference frame per mic frame.
 
         Mic audio must be a whole number of 10ms frames (640 bytes each).
         """
@@ -153,18 +156,15 @@ class AecEngine:
             )
             return mic_audio
 
-        # Feed pending reference frames into reverse stream first.
-        while self._ref_queue:
-            ref = self._ref_queue.popleft()
-            try:
-                self.ap.process_reverse_stream(ref)
-            except Exception as e:
-                logger.warning(f"process_reverse_stream failed: {e}")
-                break
-
         out = bytearray()
         n_frames = len(mic_audio) // BYTES_PER_FRAME
         for i in range(n_frames):
+            # Interleave: one reference frame per mic frame so APM timing model stays coherent.
+            if self._ref_queue:
+                try:
+                    self.ap.process_reverse_stream(self._ref_queue.popleft())
+                except Exception as e:
+                    logger.warning(f"process_reverse_stream failed: {e}")
             chunk = mic_audio[i * BYTES_PER_FRAME : (i + 1) * BYTES_PER_FRAME]
             try:
                 out.extend(self.ap.process_stream(chunk))
