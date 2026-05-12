@@ -29,7 +29,10 @@ Binary PCM audio (22050 Hz, 16-bit signed LE, mono) sent from housekeeper to Voi
 webrtcvad-based detection of speech start/end. Determines when to transcribe. Uses aggressiveness mode and silence duration threshold.
 
 ### Stream Lifecycle
-Messages sent by housekeeper when TTS streaming begins and ends: `tts_stream_start` (with streamToken) signals Pi to gate stop-word detection (suppress ambient listening, only match stop-words). `tts_stream_end` (with streamToken) signals Pi to restore normal listening. Defense-in-depth with server-side mode switching (see ADR 0011 in housekeeper). Full spec: `../housekeeper/docs/voice-node-protocol.md` (Server → Node messages).
+Messages sent by housekeeper when TTS streaming begins and ends: `tts_stream_start` (with streamToken) and `tts_stream_end` (with streamToken). Additionally, `tts_stream` chunks may carry `isAecReference: true` flag, indicating the chunk is AEC reference audio (not for playback). Pi buffers reference audio and performs local acoustic echo cancellation. Full spec: `../housekeeper/docs/voice-node-protocol.md` (Server → Node messages).
+
+### Acoustic Echo Cancellation (AEC)
+Server broadcasts TTS reference audio to all mic-capable nodes via `tts_stream` chunks with `isAecReference: true` flag. Each node buffers reference audio by timestamp and performs local echo cancellation (WebRTC AEC algorithm), subtracting known audio from microphone input and sending only residual to server. Prevents feedback loops where TTS echoes are captured as new utterances. Timestamp sync critical: Pi matches reference chunks to mic input by server-provided timestamp (±100ms tolerance).
 
 ## Architecture
 
@@ -55,8 +58,11 @@ Hexagonal architecture with domain core and adapters:
 - Events: `SpeechBoundaryDetected`, `UtteranceReady`, `TTSReceived`, `ConnectionLost`
 - `VoiceNodeApplication` — orchestrates ports, drives flow
 
-**Stop-word Detection Gate:**
-During TTS playback (when `tts_stream_start` arrives), Pi must suppress ambient listening and only match stop-words (see CONTEXT glossary for "Stream Lifecycle"). This gates stop-word detection at the Pi level. The server also gates listening window mode server-side (ADR 0011) — defense-in-depth ensures no ambient utterances leak through if either layer fails.
+**Stop-word Detection Gate & Acoustic Echo Cancellation:**
+During TTS playback, two complementary defenses prevent feedback loops:
+1. **Server-side (AEC)**: Server broadcasts TTS reference audio to all mic nodes. Each node performs local acoustic echo cancellation (WebRTC), removing known audio from microphone input.
+2. **Pi-side (Stop-word gate)**: When `tts_stream_start` arrives, Pi gates stop-word detection to suppress ambient listening and only match stop-words. This gate ensures that residual audio (after AEC) is further filtered.
+Together, these prevent both echo (AEC removes known audio) and new ambient utterances (Pi-side gate rejects non-stop-words during playback). See ADR 0012 in housekeeper for rationale.
 
 ## Stream Lifecycle Implementation (Pi-side)
 

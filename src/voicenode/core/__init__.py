@@ -270,6 +270,11 @@ class VoiceNodeApplication:
             self.transcriber = transcriber
 
         self.stop_word_detector = StopWordDetector(server=server)
+
+        # Initialize AEC engine
+        from voicenode.audio.aec_engine import AecEngine
+        self.aec_engine = AecEngine(sample_rate=16000)
+
         self.buffered_frames: list[AudioFrame] = []
         self.utterance_start_time_ms: Optional[int] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
@@ -445,9 +450,40 @@ class VoiceNodeApplication:
                         except Exception as e:
                             print(f"TTS playback error: {e}")
                             traceback.print_exc()
+                elif msg_type == "tts_stream":
+                    # Route AEC reference vs playback audio
+                    is_aec_ref = msg.get("isAecReference", False)
+                    timestamp = msg.get("timestamp")
+                    audio = msg.get("audio")
+                    stream_token = msg.get("streamToken")
+
+                    if not audio:
+                        logger.warning("tts_stream message missing audio data")
+                    elif is_aec_ref:
+                        logger.info(f"AEC reference chunk at timestamp {timestamp}ms")
+                        self.aec_engine.add_reference_chunk(timestamp_ms=timestamp, audio=audio)
+                    else:
+                        # Route to playback
+                        device_config = self.config.devices.get("output", 0)
+                        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+                        device_name = device_map.get(device_id, f"unknown (id={device_id})")
+                        size_bytes = len(audio) if audio else 0
+
+                        if self.stop_word_detector.is_listening:
+                            logger.info(f"TTS playback chunk at timestamp {timestamp}ms: {size_bytes} bytes")
+                            try:
+                                audio_output.play(audio, device_id, stream_token=stream_token)
+                            except Exception as e:
+                                logger.error(f"TTS playback error on device {device_name}: {e}")
+                        else:
+                            logger.info(f"TTS queued chunk at timestamp {timestamp}ms (waiting for stream_start)")
+                            self.pending_audio_frames.append(audio)
+
                 elif msg_type == "tts_stream_end":
                     stream_token = msg.get("streamToken")
                     self.stop_word_detector.on_tts_stream_end(stream_token=stream_token)
+                    # Clear AEC reference buffer on stream end
+                    self.aec_engine.on_stream_end()
                     # Discard queued audio on stream end (stream ended before start)
                     if self.pending_audio_frames:
                         logger.warning(f"Discarding {len(self.pending_audio_frames)} queued audio frames on stream end")
