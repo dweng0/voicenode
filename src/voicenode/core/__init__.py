@@ -275,6 +275,7 @@ class VoiceNodeApplication:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.pending_utterances: list[str] = []
         self.current_stream_token: Optional[str] = None
+        self.pending_audio_frames: list[bytes] = []  # Queue for audio until stream_start
 
     def _format_timestamp(self, ms: int) -> str:
         total_seconds = ms // 1000
@@ -404,14 +405,22 @@ class VoiceNodeApplication:
                 device_name = device_map.get(device_id, f"unknown (id={device_id})")
                 size_bytes = len(msg)
 
-                print(f"TTS received: {size_bytes} bytes, device {device_name}")
-
-                try:
-                    audio_output.play(msg, device_id, stream_token=self.current_stream_token)
-                    print(f"TTS playback started on device {device_name}")
-                except Exception as e:
-                    print(f"TTS playback error on device {device_name}: {e}")
-                    traceback.print_exc()
+                # Queue audio until stream_start received. Prevents playback before
+                # gating is activated, which would cause microphone echo to be
+                # captured as ambient utterance.
+                if self.stop_word_detector.is_listening:
+                    # Stream is active, play immediately
+                    print(f"TTS received: {size_bytes} bytes, device {device_name}")
+                    try:
+                        audio_output.play(msg, device_id, stream_token=self.current_stream_token)
+                        print(f"TTS playback started on device {device_name}")
+                    except Exception as e:
+                        print(f"TTS playback error on device {device_name}: {e}")
+                        traceback.print_exc()
+                else:
+                    # Stream not yet active, queue for later
+                    print(f"TTS queued: {size_bytes} bytes (waiting for stream_start)")
+                    self.pending_audio_frames.append(msg)
             elif isinstance(msg, dict):
                 msg_type = msg.get("type")
                 if msg_type == "config_update":
@@ -422,9 +431,27 @@ class VoiceNodeApplication:
                     stream_token = msg.get("streamToken")
                     self.current_stream_token = stream_token
                     self.stop_word_detector.on_tts_stream_start(stream_token=stream_token)
+                    # Flush queued audio frames now that gate is active
+                    while self.pending_audio_frames:
+                        audio_data = self.pending_audio_frames.pop(0)
+                        device_config = self.config.devices.get("output", 0)
+                        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+                        device_name = device_map.get(device_id, f"unknown (id={device_id})")
+                        size_bytes = len(audio_data)
+                        print(f"TTS queued flush: {size_bytes} bytes, device {device_name}")
+                        try:
+                            audio_output.play(audio_data, device_id, stream_token=self.current_stream_token)
+                            print(f"TTS playback started (from queue)")
+                        except Exception as e:
+                            print(f"TTS playback error: {e}")
+                            traceback.print_exc()
                 elif msg_type == "tts_stream_end":
                     stream_token = msg.get("streamToken")
                     self.stop_word_detector.on_tts_stream_end(stream_token=stream_token)
+                    # Discard queued audio on stream end (stream ended before start)
+                    if self.pending_audio_frames:
+                        logger.warning(f"Discarding {len(self.pending_audio_frames)} queued audio frames on stream end")
+                        self.pending_audio_frames.clear()
 
     async def _connect_and_register(self) -> None:
         await self.server.connect()
