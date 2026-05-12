@@ -96,7 +96,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
         try:
             stream = sd.OutputStream(
                 device=device_id,
-                samplerate=22050,
+                samplerate=16000,
                 channels=1,
                 dtype="int16",
             )

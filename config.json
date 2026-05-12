@@ -7,12 +7,12 @@
   "devices": {
     "input": {
       "name": "default",
-      "index": 6,
+      "index": 4,
       "serial": null
     },
     "output": {
       "name": "default",
-      "index": 6,
+      "index": 4,
       "serial": null
     }
   },
