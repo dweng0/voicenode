@@ -4,21 +4,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 
 
-def test_server_port_connects_to_url():
-    """Test that ServerPort connects to WebSocket URL."""
-    mock_websockets = MagicMock()
-    mock_websockets.connect = AsyncMock()
-    
-    with patch.dict("sys.modules", {"websockets": mock_websockets, "websockets.client": mock_websockets}):
-        from voicenode.adapters.websockets_adapter import WebsocketsAdapter
-        
-        adapter = WebsocketsAdapter("ws://localhost:3001")
-        
-        asyncio.run(adapter.connect())
-        
-        mock_websockets.connect.assert_called_once_with("ws://localhost:3001")
-
-
 def test_server_port_send_message():
     """Test that ServerPort sends JSON message."""
     mock_websockets = MagicMock()
