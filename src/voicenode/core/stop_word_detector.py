@@ -1,0 +1,65 @@
+"""Stop-word detector state machine for TTS stream interruption."""
+import asyncio
+from typing import Optional
+from voicenode.core.stop_word_matcher import StopWordMatcher
+
+
+class StopWordDetector:
+    """Detect stop-words during TTS playback and send signals to server."""
+
+    TIMEOUT_SECONDS = 30
+
+    def __init__(self, server=None):
+        self.server = server
+        self.is_listening = False
+        self.matcher = StopWordMatcher()
+        self._timeout_task: Optional[asyncio.Task] = None
+        self._current_stream_token: Optional[str] = None
+
+    def on_tts_stream_start(self, stream_token: Optional[str] = None) -> None:
+        """Signal start of TTS stream — begin listening."""
+        self.is_listening = True
+        self._current_stream_token = stream_token
+        self._start_timeout()
+
+    def on_tts_stream_end(self, stream_token: Optional[str] = None) -> None:
+        """Signal end of TTS stream — stop listening."""
+        self.is_listening = False
+        self._current_stream_token = None
+        self._cancel_timeout()
+
+    def on_timeout(self) -> None:
+        """Timeout expired — stop listening."""
+        self.is_listening = False
+        self._timeout_task = None
+
+    def _start_timeout(self) -> None:
+        """Start 30-second timeout to auto-stop listening."""
+        self._cancel_timeout()
+        self._timeout_task = asyncio.create_task(self._timeout_coroutine())
+
+    def _cancel_timeout(self) -> None:
+        """Cancel active timeout."""
+        if self._timeout_task and not self._timeout_task.done():
+            self._timeout_task.cancel()
+        self._timeout_task = None
+
+    async def _timeout_coroutine(self) -> None:
+        """Wait for timeout duration, then stop listening."""
+        try:
+            await asyncio.sleep(self.TIMEOUT_SECONDS)
+            self.on_timeout()
+        except asyncio.CancelledError:
+            pass
+
+    async def check_utterance(self, text: str) -> None:
+        """Check utterance for stop-word. Send signal if match and listening."""
+        if not self.is_listening:
+            return
+
+        keyword = self.matcher.match(text)
+        if keyword and self.server:
+            await self.server.send({
+                "type": "stop_word",
+                "keyword": keyword
+            })

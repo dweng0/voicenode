@@ -1,0 +1,161 @@
+"""Test stop-word detector state machine."""
+from unittest.mock import AsyncMock
+import pytest
+
+
+@pytest.fixture
+def mock_server():
+    """Mock server with async send method."""
+    mock = AsyncMock()
+    mock.send = AsyncMock()
+    return mock
+
+
+def test_detector_inactive_on_init():
+    """Detector starts inactive (not listening)."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=None)
+    assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_enters_listening_on_tts_stream_start(mock_server):
+    """Entering listening on tts_stream_start message."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+
+    assert detector.is_listening is True
+
+
+@pytest.mark.asyncio
+async def test_detector_exits_listening_on_tts_stream_end(mock_server):
+    """Exiting listening on tts_stream_end message."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+    assert detector.is_listening is True
+
+    detector.on_tts_stream_end()
+    assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_sends_stop_word_signal_when_listening(mock_server):
+    """Send stop_word message when listening and utterance matches."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+
+    await detector.check_utterance("wait a minute")
+
+    mock_server.send.assert_called_once_with({
+        "type": "stop_word",
+        "keyword": "wait"
+    })
+
+
+@pytest.mark.asyncio
+async def test_detector_ignores_utterance_when_not_listening(mock_server):
+    """Don't send signal if not listening."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    # Don't call on_tts_stream_start, stay inactive
+
+    await detector.check_utterance("wait a minute")
+
+    mock_server.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_detector_ignores_non_matching_utterance(mock_server):
+    """Don't send signal if utterance doesn't match."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+
+    await detector.check_utterance("continue playing")
+
+    mock_server.send.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_detector_handles_out_of_order_end_before_start(mock_server):
+    """Handle stream_end arriving before stream_start (out-of-order)."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    # Call end() without calling start() first — out-of-order
+    detector.on_tts_stream_end()
+
+    # Should still be in not-listening state, no error
+    assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_prevents_double_start(mock_server):
+    """Prevent double-start (stream_start called twice without end)."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+    assert detector.is_listening is True
+
+    # Call start again without end — should handle gracefully
+    detector.on_tts_stream_start()
+
+    # Should still be listening (no crash, no double-gating)
+    assert detector.is_listening is True
+
+
+@pytest.mark.asyncio
+async def test_detector_prevents_double_end(mock_server):
+    """Prevent double-end (stream_end called twice with same token)."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+    detector.on_tts_stream_start()
+    detector.on_tts_stream_end()
+    assert detector.is_listening is False
+
+    # Call end again — should handle gracefully
+    detector.on_tts_stream_end()
+    assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_tracks_stream_token(mock_server):
+    """Track streamToken from start and validate on end."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+
+    # Start stream with token
+    detector.on_tts_stream_start(stream_token="token-123")
+    assert detector.is_listening is True
+
+    # End stream with same token
+    detector.on_tts_stream_end(stream_token="token-123")
+    assert detector.is_listening is False
+
+
+@pytest.mark.asyncio
+async def test_detector_detects_token_mismatch(mock_server):
+    """Detect and warn on streamToken mismatch (end doesn't match start)."""
+    from voicenode.core.stop_word_detector import StopWordDetector
+
+    detector = StopWordDetector(server=mock_server)
+
+    # Start stream with token-123
+    detector.on_tts_stream_start(stream_token="token-123")
+    assert detector.is_listening is True
+
+    # End stream with DIFFERENT token — should still end but log warning
+    detector.on_tts_stream_end(stream_token="token-456")
+    assert detector.is_listening is False

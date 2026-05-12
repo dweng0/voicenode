@@ -410,10 +410,12 @@ class VoiceNodeApplication:
                 elif msg_type == "error":
                     logger.error("Server error", code=msg.get("code"), message=msg.get("message"))
                 elif msg_type == "tts_stream_start":
-                    self.current_stream_token = msg.get("streamToken")
-                    self.stop_word_detector.on_tts_stream_start()
+                    stream_token = msg.get("streamToken")
+                    self.current_stream_token = stream_token
+                    self.stop_word_detector.on_tts_stream_start(stream_token=stream_token)
                 elif msg_type == "tts_stream_end":
-                    self.stop_word_detector.on_tts_stream_end()
+                    stream_token = msg.get("streamToken")
+                    self.stop_word_detector.on_tts_stream_end(stream_token=stream_token)
 
     async def _connect_and_register(self) -> None:
         await self.server.connect()
