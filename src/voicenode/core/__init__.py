@@ -312,8 +312,17 @@ class VoiceNodeApplication:
             self.pending_utterances.append(text)
 
     async def _send_and_check_stop_word(self, message: dict, text: str) -> None:
-        """Send utterance and check for stop-words."""
-        await self.server.send(message)
+        """Send utterance (if not gated by TTS playback) and check for stop-words.
+
+        During TTS playback (is_listening=True), suppress ambient utterances
+        and only send stop_word signals. During normal listening, send all
+        utterances.
+        """
+        # Only send utterance if not in gated mode (not during TTS playback)
+        if not self.stop_word_detector.is_listening:
+            await self.server.send(message)
+
+        # Always check for stop-words (sends signal if match and listening)
         await self.stop_word_detector.check_utterance(text)
 
     def process_frame(self, frame: AudioFrame) -> Optional[VADEvent]:
