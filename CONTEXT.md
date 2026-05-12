@@ -58,6 +58,60 @@ Hexagonal architecture with domain core and adapters:
 **Stop-word Detection Gate:**
 During TTS playback (when `tts_stream_start` arrives), Pi must suppress ambient listening and only match stop-words (see CONTEXT glossary for "Stream Lifecycle"). This gates stop-word detection at the Pi level. The server also gates listening window mode server-side (ADR 0011) — defense-in-depth ensures no ambient utterances leak through if either layer fails.
 
+## Stream Lifecycle Implementation (Pi-side)
+
+### State Machine
+
+`StopWordDetector` implements a two-state gate for stop-word detection:
+
+```
+listening=False (normal) ←→ listening=True (stream gate)
+    ↑                              ↓
+    └─ ambient utterances checked  └─ only stop-words trigger signal
+       for stop-word matches           (suppress ambient listening)
+```
+
+### Message Flow
+
+1. **Server sends tts_stream_start** (with streamToken)
+   - Pi calls `detector.on_tts_stream_start(stream_token)`
+   - Transition: `listening=False → listening=True`
+   - Effect: `check_utterance()` only sends server signal if stop-word matches
+   - Starts 30s timeout as fallback
+
+2. **Pi detects utterance during stream** (from transcriber)
+   - Calls `detector.check_utterance(text)`
+   - Only sends `stop_word` signal if `is_listening=True` AND text matches stop-word list
+   - Ambient speech is suppressed (checked but not reported)
+
+3. **Server sends tts_stream_end** (with matching streamToken)
+   - Pi calls `detector.on_tts_stream_end(stream_token)`
+   - Validates token matches original stream start (warns if mismatch)
+   - Transition: `listening=True → listening=False`
+   - Cancels timeout (stream ended normally)
+   - Effect: Normal listening resumes on next utterance
+
+### Edge Cases
+
+All edge cases are handled gracefully (idempotent, no crashes):
+
+- **Out-of-order** (stream_end before stream_start): ignored, state remains correct
+- **Double-start** (stream_start twice without end): second call is no-op, no double-gating
+- **Double-end** (stream_end twice): second call is no-op, warns but doesn't crash
+- **Token mismatch** (end token ≠ start token): warns but still transitions correctly
+- **Timeout** (no stream_end within 30s): auto-restore `listening=False` (fallback for network issues)
+- **Disconnect during stream** (connection lost mid-stream): `on_disconnect()` implicit end, state cleaned for reconnect
+
+### Integration Points
+
+- `VoiceNodeApplication._receive_loop()` → parses `tts_stream_start`/`tts_stream_end` messages, calls detector methods
+- `VoiceNodeApplication._send_and_check_stop_word()` → calls `detector.check_utterance()` after sending utterance
+- `detector.check_utterance()` → uses `StopWordMatcher` to check text, sends `stop_word` signal to server if match + listening
+
+See `src/voicenode/core/stop_word_detector.py` for implementation and docstrings.
+
+Full protocol spec: `../housekeeper/docs/voice-node-protocol.md` (Server → Node messages, tts_stream_* format).
+
 ## Protocol Summary
 
 **Node → Server:**
