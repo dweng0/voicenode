@@ -504,6 +504,17 @@ class VoiceNodeApplication:
                                 f"Discarding {len(self.pending_audio_frames)} queued audio frames on stream end"
                             )
                             self.pending_audio_frames.clear()
+                        # Flush VAD buffer accumulated during TTS playback. Echo from the
+                        # speaker is detected as speech; without this flush the accumulated
+                        # frames reach Whisper after the stop-word gate closes and the
+                        # echo transcription reaches the classifier.
+                        discarded = len(self.buffered_frames)
+                        if discarded:
+                            span_ms = self.buffered_frames[-1].timestamp_ms - self.buffered_frames[0].timestamp_ms
+                            logger.info(f"Flushed {discarded} VAD frames ({span_ms}ms) accumulated during TTS playback")
+                        self.buffered_frames = []
+                        self.utterance_start_time_ms = None
+                        self.vad_tracker.set_state(VADState.SILENCE)
                     self.current_stream_is_aec_ref = False
                     self.current_stream_use_for_aec = False
                     self.current_stream_token = None
