@@ -535,7 +535,7 @@ class VoiceNodeApplication:
                         # Add 1s headroom for acoustic decay + ALSA output buffer variance.
                         bytes_per_sec = self.current_stream_sample_rate * 2  # 16-bit mono
                         playback_duration_s = self._tts_stream_bytes / bytes_per_sec if bytes_per_sec else 0
-                        estimated_end_s = self._tts_stream_start_s + playback_duration_s + 1.0
+                        estimated_end_s = self._tts_stream_start_s + playback_duration_s + 2.0
                         # Take max with existing end time so overlapping streams don't shorten window.
                         self._tts_end_time_s = max(
                             estimated_end_s,
