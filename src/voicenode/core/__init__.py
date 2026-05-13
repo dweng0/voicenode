@@ -49,6 +49,19 @@ class DeviceRegistry:
 
         return None
 
+    def find_index(self, device_identity: "DeviceIdentity") -> Optional[int]:
+        """Return the current live index for a DeviceIdentity (name-first, index fallback)."""
+        for idx, device in self.devices.items():
+            if device_identity.serial and device.get("serial") == device_identity.serial:
+                return idx
+        if device_identity.name:
+            for idx, device in self.devices.items():
+                if device.get("name") == device_identity.name:
+                    return idx
+        if device_identity.index is not None and device_identity.index in self.devices:
+            return device_identity.index
+        return None
+
 
 @dataclass
 class NodeConfig:
@@ -168,7 +181,7 @@ class ConnectionManager:
 
     def log_reconnecting(self, delay: float) -> None:
         import structlog
-        structlog.get_logger().warning("Reconnecting in {delay}s", attempt=self.reconnect_count, delay=delay)
+        structlog.get_logger().warning(f"Reconnecting in {delay}s", attempt=self.reconnect_count)
 
     def log_lost(self) -> None:
         import structlog
@@ -417,9 +430,19 @@ class VoiceNodeApplication:
             server=self.server,
         )
 
-        # Cache device list for name lookup
+        # Cache device list for name lookup and resolve output device index by name.
+        import sounddevice as sd
         devices = audio_output.list_devices()
         device_map = {d.id: d.name for d in devices}
+        _output_config = self.config.devices.get("output", 0)
+        if isinstance(_output_config, DeviceIdentity):
+            _sd_registry = DeviceRegistry(sd.query_devices())
+            _resolved_output_id = _sd_registry.find_index(_output_config)
+            if _resolved_output_id is None:
+                logger.error(f"Output device not found: {_output_config}; using default")
+                _resolved_output_id = None
+        else:
+            _resolved_output_id = _output_config
 
         while self.running:
             msg = await self.server.receive()
@@ -437,8 +460,7 @@ class VoiceNodeApplication:
                         msg, source_rate=self.current_stream_sample_rate
                     )
 
-                device_config = self.config.devices.get("output", 0)
-                device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+                device_id = _resolved_output_id
                 device_name = device_map.get(device_id, f"unknown (id={device_id})")
                 size_bytes = len(msg)
                 self._tts_stream_bytes += size_bytes
@@ -486,8 +508,7 @@ class VoiceNodeApplication:
                     # Flush queued audio frames now that gate is active
                     while self.pending_audio_frames:
                         audio_data = self.pending_audio_frames.pop(0)
-                        device_config = self.config.devices.get("output", 0)
-                        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+                        device_id = _resolved_output_id
                         device_name = device_map.get(device_id, f"unknown (id={device_id})")
                         size_bytes = len(audio_data)
                         print(f"TTS queued flush: {size_bytes} bytes, device {device_name}")
@@ -618,8 +639,15 @@ class VoiceNodeApplication:
 
         audio_adapter = SounddeviceAudioAdapter()
         device_config = self.config.devices["input"]
-        # Extract index from DeviceIdentity or use directly if int
-        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+        if isinstance(device_config, DeviceIdentity):
+            import sounddevice as sd
+            registry = DeviceRegistry(sd.query_devices())
+            device_id = registry.find_index(device_config)
+            if device_id is None:
+                logger.error(f"Input device not found: {device_config}; falling back to default")
+                device_id = None
+        else:
+            device_id = device_config
         frame_gen = audio_adapter.capture_frames(device_id=device_id, duration_ms=30)
 
         try:
@@ -637,8 +665,15 @@ class VoiceNodeApplication:
         audio_adapter = SounddeviceAudioAdapter(on_playback_complete=self._on_playback_complete)
 
         device_config = self.config.devices["input"]
-        # Extract index from DeviceIdentity or use directly if int
-        device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
+        if isinstance(device_config, DeviceIdentity):
+            import sounddevice as sd
+            registry = DeviceRegistry(sd.query_devices())
+            device_id = registry.find_index(device_config)
+            if device_id is None:
+                logger.error(f"Input device not found: {device_config}; falling back to default")
+                device_id = None
+        else:
+            device_id = device_config
         frame_gen = audio_adapter.capture_frames(device_id=device_id, duration_ms=30)
 
         try:

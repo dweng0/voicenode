@@ -1,4 +1,4 @@
-from typing import Iterator
+from typing import Iterator, Optional
 import threading
 
 from voicenode.adapters.webrtcvad_adapter import WebRTCVADAdapter as WebRTCVADAdapter
@@ -39,7 +39,7 @@ class SounddeviceAudioAdapter(AudioPort, AudioOutputPort):
             )
         return devices
 
-    def capture_frames(self, device_id: int, duration_ms: int = 100) -> Iterator[AudioFrame]:
+    def capture_frames(self, device_id: Optional[int], duration_ms: int = 100) -> Iterator[AudioFrame]:
         import sounddevice as sd
         import time
 
