@@ -358,10 +358,12 @@ class VoiceNodeApplication:
                 self.utterance_start_time_ms = frame.timestamp_ms
         
         if event == VADEvent.SPEECH_START:
-            print("Speech detected")
+            ts = time.strftime("%H:%M:%S")
+            print(f"{ts} Speech detected")
         elif event == VADEvent.SPEECH_BOUNDARY:
             silence_ms = self.vad_tracker.get_silence_duration_ms()
-            print(f"Speech boundary (silence: {silence_ms}ms)")
+            ts = time.strftime("%H:%M:%S")
+            print(f"{ts} Speech boundary (silence: {silence_ms}ms)")
             frames_to_transcribe = self.buffered_frames.copy()
             start_time = self.utterance_start_time_ms or 0
             self.executor.submit(self._transcribe_and_print, frames_to_transcribe, start_time)
@@ -534,7 +536,12 @@ class VoiceNodeApplication:
                         bytes_per_sec = self.current_stream_sample_rate * 2  # 16-bit mono
                         playback_duration_s = self._tts_stream_bytes / bytes_per_sec if bytes_per_sec else 0
                         estimated_end_s = self._tts_stream_start_s + playback_duration_s + 1.0
-                        self._tts_end_time_s = max(estimated_end_s, time.monotonic() + self._TTS_DRAIN_GRACE_S)
+                        # Take max with existing end time so overlapping streams don't shorten window.
+                        self._tts_end_time_s = max(
+                            estimated_end_s,
+                            time.monotonic() + self._TTS_DRAIN_GRACE_S,
+                            self._tts_end_time_s,
+                        )
                         remaining_s = self._tts_end_time_s - time.monotonic()
                         logger.info(
                             f"TTS drain grace: {self._tts_stream_bytes} bytes "
