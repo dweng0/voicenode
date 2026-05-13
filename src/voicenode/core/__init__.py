@@ -285,7 +285,9 @@ class VoiceNodeApplication:
         self.current_stream_use_for_aec: bool = False
         self.current_stream_sample_rate: int = 24000
         self.pending_audio_frames: list[bytes] = []  # Queue for audio until stream_start
-        self._tts_end_time_s: float = 0.0  # monotonic time of last tts_stream_end
+        self._tts_end_time_s: float = 0.0  # monotonic time when speaker will finish draining
+        self._tts_stream_start_s: float = 0.0  # monotonic time of last tts_stream_start
+        self._tts_stream_bytes: int = 0  # total PCM bytes received in current TTS stream
 
     def _format_timestamp(self, ms: int) -> str:
         total_seconds = ms // 1000
@@ -437,6 +439,7 @@ class VoiceNodeApplication:
                 device_id = device_config.index if isinstance(device_config, DeviceIdentity) else device_config
                 device_name = device_map.get(device_id, f"unknown (id={device_id})")
                 size_bytes = len(msg)
+                self._tts_stream_bytes += size_bytes
 
                 # Queue audio until stream_start gate activates. Prevents playback before
                 # gating, which would cause mic echo to be captured as ambient utterance.
@@ -468,6 +471,8 @@ class VoiceNodeApplication:
                     self.current_stream_token = stream_token
                     self.current_stream_is_aec_ref = is_aec_ref
                     self.current_stream_use_for_aec = bool(msg.get("useForAec", False))
+                    self._tts_stream_start_s = time.monotonic()
+                    self._tts_stream_bytes = 0
                     self.current_stream_sample_rate = int(msg.get("sampleRate", 24000))
 
                     if is_aec_ref:
@@ -523,8 +528,18 @@ class VoiceNodeApplication:
                         self.buffered_frames = []
                         self.utterance_start_time_ms = None
                         self.vad_tracker.set_state(VADState.SILENCE)
-                        self._tts_end_time_s = time.monotonic()
-                        logger.info(f"TTS drain grace period started ({self._TTS_DRAIN_GRACE_S}s)")
+                        # Estimate when speaker will finish draining: stream started at
+                        # _tts_stream_start_s, total PCM bytes / bytes_per_sec = duration.
+                        # Add 1s headroom for acoustic decay + ALSA output buffer variance.
+                        bytes_per_sec = self.current_stream_sample_rate * 2  # 16-bit mono
+                        playback_duration_s = self._tts_stream_bytes / bytes_per_sec if bytes_per_sec else 0
+                        estimated_end_s = self._tts_stream_start_s + playback_duration_s + 1.0
+                        self._tts_end_time_s = max(estimated_end_s, time.monotonic() + self._TTS_DRAIN_GRACE_S)
+                        remaining_s = self._tts_end_time_s - time.monotonic()
+                        logger.info(
+                            f"TTS drain grace: {self._tts_stream_bytes} bytes "
+                            f"= {playback_duration_s:.1f}s audio, suppressing VAD for {remaining_s:.1f}s"
+                        )
                     self.current_stream_is_aec_ref = False
                     self.current_stream_use_for_aec = False
                     self.current_stream_token = None
