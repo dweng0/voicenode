@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import Optional, Callable, Union
@@ -284,6 +285,7 @@ class VoiceNodeApplication:
         self.current_stream_use_for_aec: bool = False
         self.current_stream_sample_rate: int = 24000
         self.pending_audio_frames: list[bytes] = []  # Queue for audio until stream_start
+        self._tts_end_time_s: float = 0.0  # monotonic time of last tts_stream_end
 
     def _format_timestamp(self, ms: int) -> str:
         total_seconds = ms // 1000
@@ -334,7 +336,13 @@ class VoiceNodeApplication:
         # Always check for stop-words (sends signal if match and listening)
         await self.stop_word_detector.check_utterance(text)
 
+    _TTS_DRAIN_GRACE_S: float = 1.5  # seconds to suppress VAD after tts_stream_end
+
     def process_frame(self, frame: AudioFrame) -> Optional[VADEvent]:
+        # Suppress VAD while speaker is draining post-TTS to avoid echo feedback loops.
+        if time.monotonic() - self._tts_end_time_s < self._TTS_DRAIN_GRACE_S:
+            return None
+
         # Echo-cancel mic audio against buffered TTS reference.
         cancelled = self.aec_engine.cancel_echo(frame.data, timestamp_ms=frame.timestamp_ms)
         if cancelled is not frame.data:
@@ -515,6 +523,8 @@ class VoiceNodeApplication:
                         self.buffered_frames = []
                         self.utterance_start_time_ms = None
                         self.vad_tracker.set_state(VADState.SILENCE)
+                        self._tts_end_time_s = time.monotonic()
+                        logger.info(f"TTS drain grace period started ({self._TTS_DRAIN_GRACE_S}s)")
                     self.current_stream_is_aec_ref = False
                     self.current_stream_use_for_aec = False
                     self.current_stream_token = None
